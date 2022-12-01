@@ -7,6 +7,21 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from utils import load_data
 from tqdm import tqdm
+from sklearn.metrics import accuracy_score, confusion_matrix
+
+
+def to_pred(logits: torch.Tensor) -> list:
+    with torch.no_grad():
+        pred = F.softmax(logits, dim=1).cpu()
+        pred = pred.argmax(dim=1)
+    return pred.numpy().tolist()
+
+
+def calcu_label_weights(labels: torch.Tensor) -> torch.Tensor:
+    with torch.no_grad():
+        unique_labels, counts = torch.unique(labels, return_counts=True)
+        weights = (1 / counts)*len(labels)/len(unique_labels)
+    return weights
 
 
 class cnn_max(nn.Module):
@@ -68,6 +83,7 @@ class modelHandler():
         model_name: str = "cnn-max",
         epochs: int = 30,
         batch_szie: int = 512,
+        lr: float = 1e-3,
         device: str = "cpu"
     ) -> None:
 
@@ -80,6 +96,7 @@ class modelHandler():
         # training info
         self.epochs = epochs
         self.batch_size = batch_szie
+        self.lr = lr
 
         # set device
         if device == "cpu" or (not torch.cuda.is_available()):
@@ -105,31 +122,40 @@ class modelHandler():
                 self.train_data[0]).to(dtype=torch.float32)
             labels = torch.from_numpy(self.train_data[1]).to(dtype=torch.long)
 
-        # normalize data
+        features.requires_grad = False
+        labels.requires_grad = False
+
+        # normalize data ->  pay attention to dimension! time windows are normalized.
         features = F.normalize(features, dim=3)
 
         # optimizer
         optimizer = torch.optim.SGD(
             self.model.parameters(),
-            lr=1e-3,
+            lr=self.lr,
             momentum=0.9,
             nesterov=True
         )
 
+        print(f"weights info: {calcu_label_weights(labels)}")
+        print(f"label 1 ratio: {len(labels[labels == 1]) / len(labels)}")
+
         # loss func
-        loss_func = nn.CrossEntropyLoss()
+        loss_func = nn.CrossEntropyLoss(weight=calcu_label_weights(labels))
 
         # begin training
-        batch_num = math.floor(len(labels) / self.batch_size)
+        batch_num = math.ceil(len(labels) / self.batch_size)
         for epoch in (range(self.epochs)):
 
             loss = 0.0
+            pred = []
 
             # mini-batch trainig
             for batch in tqdm(range(batch_num)):
                 # i do not want to use dataloader...
+                optimizer.zero_grad()
+
                 batch_mask = list(
-                    range(batch*self.batch_size, (batch+1)*self.batch_size))
+                    range(batch*self.batch_size, min((batch+1)*self.batch_size, len(labels))))
                 output = self.model(features[batch_mask])
 
                 batch_loss = loss_func(output, labels[batch_mask])
@@ -137,5 +163,12 @@ class modelHandler():
                 optimizer.step()
 
                 loss += batch_loss.item()
+                # print(to_pred(output))
+                pred.extend(to_pred(output))
 
-            print(f"Epoch: {epoch}, loss: {loss / batch_num}")
+            # print(len(pred))
+            true = labels.cpu().numpy()
+            pred = np.array(pred)
+            print(
+                f"Epoch: {epoch}, loss: {loss / batch_num}, acc: {accuracy_score(true, pred)}")
+            print(confusion_matrix(true, pred))
