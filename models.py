@@ -5,16 +5,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from utils import load_data
+from utils import load_data, to_pred
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, confusion_matrix
-
-
-def to_pred(logits: torch.Tensor) -> list:
-    with torch.no_grad():
-        pred = F.softmax(logits, dim=1).cpu()
-        pred = pred.argmax(dim=1)
-    return pred.numpy().tolist()
 
 
 def calcu_label_weights(labels: torch.Tensor) -> torch.Tensor:
